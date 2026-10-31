@@ -180,4 +180,9 @@ if __name__ == "__main__":
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("bakiye", bakiye_goster))
-    app.add_handler(CommandHandler("teminat_ekle", teminat_ek
+    app.add_handler(CommandHandler("teminat_ekle", teminat_ekle))
+    app.add_handler(CommandHandler("oran", oran_ayarla))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_trade))
+
+    print("Bot başarıyla başlatıldı ve çalışıyor...")
+    app.run_polling()
