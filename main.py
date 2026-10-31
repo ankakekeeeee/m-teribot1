@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- WEB SUNUCUSU (ARKA Planda ÇALIŞACAK) ---
+# --- WEB SUNUCUSU (RENDER İÇİN) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -79,10 +79,13 @@ def log_trade(chat_id, amount):
     conn.commit()
     conn.close()
 
-def reset_trade_logs(chat_id):
+def full_reset_group(chat_id):
     conn = sqlite3.connect("bot_data.db")
     cursor = conn.cursor()
+    # 1. İşlem geçmişini temizle
     cursor.execute("DELETE FROM trade_logs WHERE chat_id = ?", (chat_id,))
+    # 2. Teminatı varsayılan başlangıç değerine (1000₺) sıfırla
+    cursor.execute("UPDATE groups SET teminat = 1000.0 WHERE chat_id = ?", (chat_id,))
     conn.commit()
     conn.close()
 
@@ -114,12 +117,12 @@ def format_last_trades(chat_id):
         ts = r[1]
         t_str = datetime.fromtimestamp(ts).strftime('%H:%M:%S')
         if amount > 0:
-            text += f"▪️ <b>+{amount:,.0f}$</b> (Kazanç) — <code>{t_str}</code>\n"
+            text += f"▪️ <b>+{amount:,.0f}₺</b> (Kazanç) — <code>{t_str}</code>\n"
         else:
-            text += f"▪️ <b>{amount:,.0f}$</b> (Kayıp) — <code>{t_str}</code>\n"
+            text += f"▪️ <b>{amount:,.0f}₺</b> (Kayıp) — <code>{t_str}</code>\n"
     return text
 
-# --- VIP BOT KOMUTLARI (HTML FORMAT) ---
+# --- VIP BOT KOMUTLARI (TL & HTML) ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -130,9 +133,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"👑 <b>PROFESÖR 47 — VIP FİNANS & TEMİNAT SİSTEMİ</b> 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💎 <b>Mevcut Teminat:</b> <code>{profile['teminat']:,.2f}$</code>\n"
+        f"💎 <b>Mevcut Teminat:</b> <code>{profile['teminat']:,.2f}₺</code>\n"
         f"📊 <b>Komisyon Oranı:</b> <code>%{profile['komisyon_orani']:.0f}</code>\n"
-        f"📥 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}$</code>\n"
+        f"📥 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}₺</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📜 <b>SON 5 İŞLEM GEÇMİŞİ:</b>\n{son_islemler}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -140,7 +143,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <code>/teminat_ekle &lt;miktar&gt;</code> - Kasaya teminat ekler\n"
         f"• <code>/oran &lt;yüzde&gt;</code> - Komisyon oranını günceller\n"
         f"• <code>/bakiye</code> - Güncel durumu raporlar\n"
-        f"• <code>/restart</code> - Günlük toplam geleni ve geçmişi sıfırlar\n\n"
+        f"• <code>/restart</code> - Teminatı ve günlük toplam geleni sıfırlar\n\n"
         f"💡 <i>İşlem girmek için gruba direkt <code>+20k</code> veya <code>-5k</code> yazabilirsiniz.</i>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
@@ -154,9 +157,9 @@ async def bakiye_goster(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"💎 <b>PROFESÖR 47 — VIP DURUM RAPORU</b> 💎\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>Kalan Teminat:</b> <code>{profile['teminat']:,.2f}$</code>\n"
+        f"💰 <b>Kalan Teminat:</b> <code>{profile['teminat']:,.2f}₺</code>\n"
         f"✂️ <b>Komisyon Oranı:</b> <code>%{profile['komisyon_orani']:.0f}</code>\n"
-        f"📥 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}$</code>\n"
+        f"📥 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}₺</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📜 <b>SON 5 İŞLEM:</b>\n{son_islemler}"
     )
@@ -164,12 +167,13 @@ async def bakiye_goster(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    reset_trade_logs(chat_id)
+    full_reset_group(chat_id)
     
     text = (
-        f"🔄 <b>SİSTEM YENİDEN BAŞLATILDI!</b> 🔄\n"
+        f"🔄 <b>SİSTEM YENİDEN BAŞLATILDI & SIFIRLANDI!</b> 🔄\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✨ Günlük total gelen bakiye ve son işlem geçmişi başarıyla <b>sıfırlandı</b>.\n"
+        f"✨ Teminatınız <b>1,000.00₺</b> olarak güncellendi.\n"
+        f"✨ Günlük total gelen bakiye ve işlem geçmişi başarıyla <b>sıfırlandı</b>.\n"
         f"🚀 Yeni döneme tertemiz bir başlangıç yapıldı!"
     )
     await update.message.reply_text(text, parse_mode="HTML")
@@ -190,8 +194,8 @@ async def teminat_ekle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ <b>KASAYA TEMİNAT EKLENDİ</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"➕ <b>Eklenen:</b> <code>{eklenen:,.2f}$</code>\n"
-            f"💰 <b>Güncel Teminat:</b> <code>{yeni_teminat:,.2f}$</code>",
+            f"➕ <b>Eklenen:</b> <code>{eklenen:,.2f}₺</code>\n"
+            f"💰 <b>Güncel Teminat:</b> <code>{yeni_teminat:,.2f}₺</code>",
             parse_mode="HTML"
         )
     except ValueError:
@@ -260,11 +264,11 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         yanit = (
             f"📈 <b>İŞLEM ONAYLANDI (+{val/1000:.0f}k)</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📥 <b>Gelen Para:</b> <code>{gelen_para:,.2f}$</code>\n"
-            f"✂️ <b>Komisyon (%{profile['komisyon_orani']:.0f}):</b> <code>{kesilen_komisyon:,.2f}$</code> <i>(Sizin Kazancınız)</i>\n"
-            f"📉 <b>Teminattan Düşen:</b> <code>{teminden_dusen:,.2f}$</code>\n"
-            f"💰 <b>Kalan Tem:</b> <code>{yeni_teminat:,.2f}$</code>\n"
-            f"📊 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}$</code>\n"
+            f"📥 <b>Gelen Para:</b> <code>{gelen_para:,.2f}₺</code>\n"
+            f"✂️ <b>Komisyon (%{profile['komisyon_orani']:.0f}):</b> <code>{kesilen_komisyon:,.2f}₺</code> <i>(Sizin Kazancınız)</i>\n"
+            f"📉 <b>Teminattan Düşen:</b> <code>{teminden_dusen:,.2f}₺</code>\n"
+            f"💰 <b>Kalan Tem:</b> <code>{yeni_teminat:,.2f}₺</code>\n"
+            f"📊 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}₺</code>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📜 <b>SON 5 İŞLEM:</b>\n{son_islemler}"
         )
@@ -281,9 +285,9 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         yanit = (
             f"🔻 <b>KAYIP İŞLENDİ (-{kayip/1000:.0f}k)</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📉 <b>Kayıp Miktarı:</b> <code>{kayip:,.2f}$</code>\n"
-            f"💰 <b>Kalan Tem:</b> <code>{yeni_teminat:,.2f}$</code>\n"
-            f"📊 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}$</code>\n"
+            f"📉 <b>Kayıp Miktarı:</b> <code>{kayip:,.2f}₺</code>\n"
+            f"💰 <b>Kalan Tem:</b> <code>{yeni_teminat:,.2f}₺</code>\n"
+            f"📊 <b>Total Gelen (24s):</b> <code>{total_gelen:,.2f}₺</code>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📜 <b>SON 5 İŞLEM:</b>\n{son_islemler}"
         )
@@ -293,15 +297,12 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     TOKEN = "9126712433:AAHTEwxuLKAx-P8ds_wxTdKHB3CUhzgU5Xw"
     
-    # 1. Flask web sunucusunu arka planda (thread) çalıştır (Render Live kalması için)
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
-    # 2. Veritabanını hazırla
     init_db()
     
-    # 3. Telegram botunu ana thread'de çalıştır (Python 3.14 ve sinyal kuralı için zorunlu)
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
