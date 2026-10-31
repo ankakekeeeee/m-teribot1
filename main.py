@@ -1,9 +1,10 @@
 import logging
 import sqlite3
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Loglama ayarları (Hataları görmek için önemlidir)
+# Loglama ayarları
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,6 @@ def get_group_profile(chat_id):
     row = cursor.fetchone()
     
     if not row:
-        # İlk defa yazan grup için varsayılan değerler
         cursor.execute("INSERT INTO groups (chat_id, teminat, komisyon_orani) VALUES (?, ?, ?)", (chat_id, 1000.0, 10.0))
         conn.commit()
         profile = {"teminat": 1000.0, "komisyon_orani": 10.0}
@@ -127,7 +127,7 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_positive = False
         msg_text = msg_text[1:]
     else:
-        return # + veya - ile başlamayan mesajları işlem olarak algılama
+        return 
 
     if msg_text.endswith("k"):
         try:
@@ -173,14 +173,9 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(yanit, parse_mode="Markdown")
 
 if __name__ == "__main__":
-    import os
-    # Render üzerinde gizli tutacağımız BOT_TOKEN'ı çevre değişkeninden (Environment Variable) alıyoruz
-    TOKEN = os.getenv("BOT_TOKEN")
+    # Token'ı direkt buraya ekledim
+    TOKEN = "9126712433:AAHTEwxuLKAx-P8ds_wxTdKHB3CUhzgU5Xw"
     
-    if not TOKEN:
-        print("HATA: BOT_TOKEN çevre değişkeni bulunamadı!")
-        exit(1)
-
     init_db()
     
     app = ApplicationBuilder().token(TOKEN).build()
