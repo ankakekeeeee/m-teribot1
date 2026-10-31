@@ -12,16 +12,16 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- UYUMAMASI İÇİN MİNİ WEB SUNUCUSU (FLASK) ---
+# --- WEB SUNUCUSU (RENDER İÇİN ZORUNLU) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
     return "👑 Profesör 47 VIP Bot Aktif ve Çalışıyor!"
 
-def run_web():
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    web_app.run(host="0.0.0.0", port=port)
+    web_app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # --- VERİTABANI İŞLEMLERİ ---
 def init_db():
@@ -249,4 +249,69 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         komisyon_orani = profile["komisyon_orani"] / 100.0
         kesilen_komisyon = gelen_para * komisyon_orani
-        teminden_dusen = gelen_
+        teminden_dusen = gelen_para - kesilen_komisyon
+        
+        yeni_teminat = profile["teminat"] - teminden_dusen
+        update_group_profile(chat_id, teminat=yeni_teminat)
+        
+        total_gelen = get_24h_total_incoming(chat_id)
+        son_islemler = format_last_trades(chat_id)
+        
+        yanit = (
+            f"📈 **İŞLEM ONAYLANDI (+{val/1000:.0f}k)**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📥 **Gelen Para:** `{gelen_para:,.2f}$`\n"
+            f"✂️ **Komisyon (%{profile['komisyon_orani']:.0f}):** `{kesilen_komisyon:,.2f}$` *(Sizin Kazancınız)*\n"
+            f"📉 **Teminattan Düşen:** `{teminned_dusen if 'teminned_dusen' in locals() else teminden_dusen:,.2f}$`\n"
+            f"💰 **Kalan Tem:** `{yeni_teminat:,.2f}$`\n"
+            f"📊 **Total Gelen (24s):** `{total_gelen:,.2f}$`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📜 **Son 5 İşlem:**\n{son_islemler}"
+        )
+    else:
+        kayip = abs(val)
+        log_trade(chat_id, -kayip)
+        
+        yeni_teminat = profile["teminat"] - kayip
+        update_group_profile(chat_id, teminat=yeni_teminat)
+        
+        total_gelen = get_24h_total_incoming(chat_id)
+        son_islemler = format_last_trades(chat_id)
+        
+        yanit = (
+            f"🔻 **KAYIP İŞLENDİ (-{kayip/1000:.0f}k)**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📉 **Kayıp Miktarı:** `{kayip:,.2f}$`\n"
+            f"💰 **Kalan Tem:** `{yeni_teminat:,.2f}$`\n"
+            f"📊 **Total Gelen (24s):** `{total_gelen:,.2f}$`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📜 **Son 5 İşlem:**\n{son_islemler}"
+        )
+
+    await update.message.reply_text(yanit, parse_mode="Markdown")
+
+def run_telegram_bot():
+    TOKEN = "9126712433:AAHTEwxuLKAx-P8ds_wxTdKHB3CUhzgU5Xw"
+    init_db()
+    
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("bakiye", bakiye_goster))
+    app.add_handler(CommandHandler("restart", restart_bot))
+    app.add_handler(CommandHandler("teminat_ekle", teminat_ekle))
+    app.add_handler(CommandHandler("oran", oran_ayarla))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_trade))
+
+    print("Telegram Botu polling başlatılıyor...")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    # Telegram botunu arka planda thread olarak çalıştır
+    bot_thread = Thread(target=run_telegram_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Ana thread'de Flask web sunucusunu çalıştır (Render'ın erken kapanmasını önler)
+    print("Flask web sunucusu başlatılıyor...")
+    run_flask()
