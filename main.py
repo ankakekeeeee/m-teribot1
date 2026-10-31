@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -11,6 +12,8 @@ logger = logging.getLogger(__name__)
 def init_db():
     conn = sqlite3.connect("bot_data.db")
     cursor = conn.cursor()
+    
+    # Grup bilgileri tablosu
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS groups (
             chat_id INTEGER PRIMARY KEY,
@@ -18,6 +21,17 @@ def init_db():
             komisyon_orani REAL DEFAULT 10.0
         )
     """)
+    
+    # İşlem geçmişi tablosu (24 saatlik toplam gelen parayı hesaplamak için)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trade_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            amount REAL,
+            timestamp INTEGER
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -47,30 +61,55 @@ def update_group_profile(chat_id, teminat=None, komisyon_orani=None):
     conn.commit()
     conn.close()
 
+def log_trade(chat_id, amount):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    now = int(time.time())
+    cursor.execute("INSERT INTO trade_logs (chat_id, amount, timestamp) VALUES (?, ?, ?)", (chat_id, amount, now))
+    conn.commit()
+    conn.close()
+
+def get_24h_total_incoming(chat_id):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    # Son 24 saat (24 * 60 * 60 = 86400 saniye)
+    day_ago = int(time.time()) - 86400
+    
+    cursor.execute("SELECT SUM(amount) FROM trade_logs WHERE chat_id = ? AND amount > 0 AND timestamp >= ?", (chat_id, day_ago))
+    row = cursor.fetchone()
+    conn.close()
+    
+    return row[0] if row and row[0] is not None else 0.0
+
 # --- BOT KOMUTLARI VE MESAJLARI ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     profile = get_group_profile(chat_id)
+    total_gelen = get_24h_total_incoming(chat_id)
+    
     text = (
         f"🤖 **Profesör 47 - Teminat & Komisyon Takip Botu**\n\n"
         f"💰 Mevcut Teminat: `{profile['teminat']:,.2f}$`\n"
-        f"📊 Komisyon Oranı: `%{profile['komisyon_orani']:.0f}`\n\n"
+        f"📊 Komisyon Oranı: `%{profile['komisyon_orani']:.0f}`\n"
+        f"📥 Son 24s Total Gelen: `{total_gelen:,.2f}$`\n\n"
         f"📌 **Komutlar:**\n"
-        f"• `/teminat_ekle <miktar>` - Teminat ekler (Örn: `/teminat_ekle 1000`)\n"
-        f"• `/oran <yüzde>` - Komisyon oranını değiştirir (Örn: `/oran 10`)\n"
-        f"• `/bakiye` - Güncel teminatı ve oranı gösterir\n\n"
-        f"✍️ *İşlem girmek için gruba direkt `+20k` veya `-5k` yazabilirsiniz.*"
+        f"• `/teminat_ekle <miktar>` - Teminat ekler\n"
+        f"• `/oran <yüzde>` - Komisyon oranını değiştirir\n"
+        f"• `/bakiye` - Güncel durumu gösterir"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def bakiye_goster(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     profile = get_group_profile(chat_id)
+    total_gelen = get_24h_total_incoming(chat_id)
+    
     text = (
         f"📊 **Güncel Durum Bilgisi**\n\n"
         f"💰 Kalan Teminat: `{profile['teminat']:,.2f}$`\n"
-        f"✂️ Komisyon Oranı: `%{profile['komisyon_orani']:.0f}`"
+        f"✂️ Komisyon Oranı: `%{profile['komisyon_orani']:.0f}`\n"
+        f"📥 Son 24s Total Gelen: `{total_gelen:,.2f}$`"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -94,7 +133,7 @@ async def teminat_ekle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except ValueError:
-        await update.message.reply_text("❌ Geçersiz miktar girdiniz. Sadece sayı kullanın.")
+        await update.message.reply_text("❌ Geçersiz miktar girdiniz.")
 
 async def oran_ayarla(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -144,6 +183,9 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if val > 0:
         gelen_para = val
+        # İşlemi veritabanına logla (24 saatlik toplam için)
+        log_trade(chat_id, gelen_para)
+        
         komisyon_orani = profile["komisyon_orani"] / 100.0
         kesilen_komisyon = gelen_para * komisyon_orani
         teminden_dusen = gelen_para - kesilen_komisyon
@@ -151,22 +193,29 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         yeni_teminat = profile["teminat"] - teminden_dusen
         update_group_profile(chat_id, teminat=yeni_teminat)
         
+        # Son 24 saatlik toplam geleni hesapla
+        total_gelen = get_24h_total_incoming(chat_id)
+        
         yanit = (
             f"📈 **İşlem İşlendi (+{val/1000:.0f}k)**\n\n"
             f"📥 Gelen Para: `{gelen_para:,.2f}$`\n"
             f"✂️ Kesilen Komisyon (%{profile['komisyon_orani']:.0f}): `{kesilen_komisyon:,.2f}$` (Sizin Kazancınız)\n"
             f"📉 Teminattan Düşen: `{teminden_dusen:,.2f}$`\n"
-            f"💰 **Kalan Tem: {yeni_teminat:,.2f}$**"
+            f"💰 **Kalan Tem: {yeni_teminat:,.2f}$**\n"
+            f"📊 **Total Gelen (24s): {total_gelen:,.2f}$**"
         )
     else:
         kayip = abs(val)
         yeni_teminat = profile["teminat"] - kayip
         update_group_profile(chat_id, teminat=yeni_teminat)
         
+        total_gelen = get_24h_total_incoming(chat_id)
+        
         yanit = (
             f"🔻 **Kayıp İşlendi (-{kayip/1000:.0f}k)**\n\n"
             f"📉 Kayıp Miktarı: `{kayip:,.2f}$`\n"
-            f"💰 **Kalan Tem: {yeni_teminat:,.2f}$**"
+            f"💰 **Kalan Tem: {yeni_teminat:,.2f}$**\n"
+            f"📊 **Total Gelen (24s): {total_gelen:,.2f}$**"
         )
 
     await update.message.reply_text(yanit, parse_mode="Markdown")
