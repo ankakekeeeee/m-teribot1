@@ -1,6 +1,9 @@
 import logging
 import sqlite3
 import time
+import os
+from threading import Thread
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -8,12 +11,21 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- UYUMAMASI İÇİN MİNİ WEB SUNUCUSU (FLASK) ---
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Bot aktif ve çalışıyor!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
 # --- VERİTABANI İŞLEMLERİ ---
 def init_db():
     conn = sqlite3.connect("bot_data.db")
     cursor = conn.cursor()
-    
-    # Grup bilgileri tablosu
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS groups (
             chat_id INTEGER PRIMARY KEY,
@@ -21,8 +33,6 @@ def init_db():
             komisyon_orani REAL DEFAULT 10.0
         )
     """)
-    
-    # İşlem geçmişi tablosu (24 saatlik toplam gelen parayı hesaplamak için)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +41,6 @@ def init_db():
             timestamp INTEGER
         )
     """)
-    
     conn.commit()
     conn.close()
 
@@ -72,16 +81,13 @@ def log_trade(chat_id, amount):
 def get_24h_total_incoming(chat_id):
     conn = sqlite3.connect("bot_data.db")
     cursor = conn.cursor()
-    # Son 24 saat (24 * 60 * 60 = 86400 saniye)
     day_ago = int(time.time()) - 86400
-    
     cursor.execute("SELECT SUM(amount) FROM trade_logs WHERE chat_id = ? AND amount > 0 AND timestamp >= ?", (chat_id, day_ago))
     row = cursor.fetchone()
     conn.close()
-    
     return row[0] if row and row[0] is not None else 0.0
 
-# --- BOT KOMUTLARI VE MESAJLARI ---
+# --- BOT KOMUTLARI ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -183,7 +189,6 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if val > 0:
         gelen_para = val
-        # İşlemi veritabanına logla (24 saatlik toplam için)
         log_trade(chat_id, gelen_para)
         
         komisyon_orani = profile["komisyon_orani"] / 100.0
@@ -193,7 +198,6 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         yeni_teminat = profile["teminat"] - teminden_dusen
         update_group_profile(chat_id, teminat=yeni_teminat)
         
-        # Son 24 saatlik toplam geleni hesapla
         total_gelen = get_24h_total_incoming(chat_id)
         
         yanit = (
@@ -215,13 +219,18 @@ async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔻 **Kayıp İşlendi (-{kayip/1000:.0f}k)**\n\n"
             f"📉 Kayıp Miktarı: `{kayip:,.2f}$`\n"
             f"💰 **Kalan Tem: {yeni_teminat:,.2f}$**\n"
-            f"📊 **Total Gelen (24s): {total_gelen:,.2f}$**"
+            f"📊 **Render / Total Gelen (24s): {total_gelen:,.2f}$**"
         )
 
     await update.message.reply_text(yanit, parse_mode="Markdown")
 
 if __name__ == "__main__":
     TOKEN = "9126712433:AAHTEwxuLKAx-P8ds_wxTdKHB3CUhzgU5Xw"
+    
+    # 1. Mini web sunucusunu arka planda (thread olarak) başlat
+    t = Thread(target=run_web)
+    t.daemon = True
+    t.start()
     
     init_db()
     
@@ -233,5 +242,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("oran", oran_ayarla))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_trade))
 
-    print("Bot başarıyla başlatıldı ve çalışıyor...")
+    print("Bot ve Web Sunucusu başarıyla başlatıldı ve çalışıyor...")
     app.run_polling()
